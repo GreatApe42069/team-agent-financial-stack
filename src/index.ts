@@ -9,6 +9,7 @@ import { createInvoice, sendInvoice, payInvoice } from './core/ledger';
 import { createSubscription, processBilling, processDueSubscriptions } from './core/subscriptions';
 import { getOpenworkBalance, getEthBalance, verifyOpenworkBalance, CONTRACTS } from './core/onchain';
 import { registerWebhook, unregisterWebhook, getWebhooks } from './core/webhooks';
+import { openApiSpec } from './openapi';
 import { 
   createAllowanceSchema, 
   updateAllowanceSchema,
@@ -452,10 +453,38 @@ app.get('/api/health', (c) => {
   return c.json({ 
     status: 'ok', 
     service: 'agent-financial-stack',
-    version: '1.4.0',
+    version: '1.5.0',
     timestamp: new Date().toISOString(),
     contracts: CONTRACTS,
   });
+});
+
+// --- OpenAPI spec ---
+app.get('/api/openapi.json', (c) => {
+  return c.json(openApiSpec);
+});
+
+app.get('/api/docs', (c) => {
+  // Serve Swagger UI
+  return c.html(`
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <title>Agent Financial Stack API</title>
+      <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css">
+    </head>
+    <body>
+      <div id="swagger-ui"></div>
+      <script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
+      <script>
+        SwaggerUIBundle({
+          url: '/api/openapi.json',
+          dom_id: '#swagger-ui',
+        });
+      </script>
+    </body>
+    </html>
+  `);
 });
 
 // ===========================================
