@@ -8,6 +8,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { createInvoice, sendInvoice, payInvoice } from './core/ledger';
 import { createSubscription, processBilling, processDueSubscriptions } from './core/subscriptions';
 import { getOpenworkBalance, getEthBalance, verifyOpenworkBalance, CONTRACTS } from './core/onchain';
+import { registerWebhook, unregisterWebhook, getWebhooks } from './core/webhooks';
 import { 
   createAllowanceSchema, 
   updateAllowanceSchema,
@@ -406,6 +407,44 @@ app.get('/api/wallet/:address/verify', async (c) => {
     token: CONTRACTS.OPENWORK_TOKEN,
     chain: 'base',
   });
+});
+
+// --- Webhook management ---
+app.get('/api/webhooks/:agentId', (c) => {
+  const agentId = c.req.param('agentId');
+  const webhooks = getWebhooks(agentId);
+  return c.json({ agentId, webhooks, count: webhooks.length });
+});
+
+app.post('/api/webhooks', async (c) => {
+  const body = await c.req.json();
+  const { agentId, webhookUrl } = body;
+
+  if (!agentId || !webhookUrl) {
+    return c.json({ error: 'Missing agentId or webhookUrl' }, 400);
+  }
+
+  // Basic URL validation
+  try {
+    new URL(webhookUrl);
+  } catch {
+    return c.json({ error: 'Invalid webhook URL' }, 400);
+  }
+
+  registerWebhook(agentId, webhookUrl);
+  return c.json({ success: true, agentId, webhookUrl });
+});
+
+app.delete('/api/webhooks', async (c) => {
+  const body = await c.req.json();
+  const { agentId, webhookUrl } = body;
+
+  if (!agentId || !webhookUrl) {
+    return c.json({ error: 'Missing agentId or webhookUrl' }, 400);
+  }
+
+  unregisterWebhook(agentId, webhookUrl);
+  return c.json({ success: true, agentId, webhookUrl });
 });
 
 // --- Health check ---
