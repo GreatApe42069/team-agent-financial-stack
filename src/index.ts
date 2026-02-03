@@ -7,6 +7,7 @@ import { desc, eq } from 'drizzle-orm';
 import { v4 as uuidv4 } from 'uuid';
 import { createInvoice, sendInvoice, payInvoice } from './core/ledger';
 import { createSubscription, processBilling, processDueSubscriptions } from './core/subscriptions';
+import { getOpenworkBalance, getEthBalance, verifyOpenworkBalance, CONTRACTS } from './core/onchain';
 import { 
   createAllowanceSchema, 
   updateAllowanceSchema,
@@ -360,13 +361,61 @@ app.get('/api/agents/:agentId/summary', async (c) => {
   });
 });
 
+// --- On-chain balance endpoints ---
+app.get('/api/wallet/:address/balance', async (c) => {
+  const address = c.req.param('address');
+  
+  if (!address.match(/^0x[a-fA-F0-9]{40}$/)) {
+    return c.json({ error: 'Invalid wallet address' }, 400);
+  }
+
+  const [openwork, eth] = await Promise.all([
+    getOpenworkBalance(address),
+    getEthBalance(address),
+  ]);
+
+  return c.json({
+    address,
+    openwork: {
+      balance: openwork.balance,
+      balanceRaw: openwork.balanceRaw,
+      token: CONTRACTS.OPENWORK_TOKEN,
+    },
+    eth: {
+      balance: eth.balance,
+      balanceRaw: eth.balanceRaw,
+    },
+    chain: 'base',
+  });
+});
+
+app.get('/api/wallet/:address/verify', async (c) => {
+  const address = c.req.param('address');
+  const requiredStr = c.req.query('required') || '100000'; // Default 100K for hackathon
+  const required = parseFloat(requiredStr);
+
+  if (!address.match(/^0x[a-fA-F0-9]{40}$/)) {
+    return c.json({ error: 'Invalid wallet address' }, 400);
+  }
+
+  const result = await verifyOpenworkBalance(address, required);
+  
+  return c.json({
+    address,
+    ...result,
+    token: CONTRACTS.OPENWORK_TOKEN,
+    chain: 'base',
+  });
+});
+
 // --- Health check ---
 app.get('/api/health', (c) => {
   return c.json({ 
     status: 'ok', 
     service: 'agent-financial-stack',
-    version: '1.3.0',
-    timestamp: new Date().toISOString()
+    version: '1.4.0',
+    timestamp: new Date().toISOString(),
+    contracts: CONTRACTS,
   });
 });
 
