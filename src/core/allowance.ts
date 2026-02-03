@@ -4,13 +4,13 @@ import { eq, sql } from 'drizzle-orm';
 import { v4 as uuidv4 } from 'uuid';
 
 export async function checkSpend(agentId: string, amount: number, category: string, allowanceId?: string): Promise<{ allowed: boolean; reason?: string; allowanceId?: string }> {
-  let query = db.select().from(allowances).where(eq(allowances.agentId, agentId));
-  
+  // Query for allowance - either by specific ID or by agent
+  let allowance;
   if (allowanceId) {
-    query = query.where(eq(allowances.id, allowanceId));
+    allowance = await db.select().from(allowances).where(eq(allowances.id, allowanceId)).limit(1).get();
+  } else {
+    allowance = await db.select().from(allowances).where(eq(allowances.agentId, agentId)).limit(1).get();
   }
-
-  const allowance = await query.limit(1).get();
 
   if (!allowance) {
     return { allowed: false, reason: 'Allowance not found' };
@@ -21,16 +21,22 @@ export async function checkSpend(agentId: string, amount: number, category: stri
   }
 
   // Check limits
-  // (Assuming amount is positive)
   if (amount <= 0) return { allowed: false, reason: 'Amount must be positive' };
 
-  if (allowance.dailyLimit > 0 && (allowance.spentToday || 0) + amount > allowance.dailyLimit) {
+  const dailyLimit = allowance.dailyLimit ?? 0;
+  const weeklyLimit = allowance.weeklyLimit ?? 0;
+  const monthlyLimit = allowance.monthlyLimit ?? 0;
+  const spentToday = allowance.spentToday ?? 0;
+  const spentThisWeek = allowance.spentThisWeek ?? 0;
+  const spentThisMonth = allowance.spentThisMonth ?? 0;
+
+  if (dailyLimit > 0 && spentToday + amount > dailyLimit) {
     return { allowed: false, reason: 'Daily limit exceeded' };
   }
-  if (allowance.weeklyLimit > 0 && (allowance.spentThisWeek || 0) + amount > allowance.weeklyLimit) {
+  if (weeklyLimit > 0 && spentThisWeek + amount > weeklyLimit) {
     return { allowed: false, reason: 'Weekly limit exceeded' };
   }
-  if (allowance.monthlyLimit > 0 && (allowance.spentThisMonth || 0) + amount > allowance.monthlyLimit) {
+  if (monthlyLimit > 0 && spentThisMonth + amount > monthlyLimit) {
     return { allowed: false, reason: 'Monthly limit exceeded' };
   }
 

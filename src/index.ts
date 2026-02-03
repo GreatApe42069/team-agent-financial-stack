@@ -7,6 +7,15 @@ import { desc, eq } from 'drizzle-orm';
 import { v4 as uuidv4 } from 'uuid';
 import { createInvoice, sendInvoice, payInvoice } from './core/ledger';
 import { createSubscription, processBilling, processDueSubscriptions } from './core/subscriptions';
+import { 
+  createAllowanceSchema, 
+  updateAllowanceSchema,
+  createInvoiceSchema, 
+  payInvoiceSchema,
+  createSubscriptionSchema,
+  paginationSchema,
+  agentFilterSchema
+} from './validation';
 
 const app = new Hono();
 
@@ -82,7 +91,7 @@ app.get('/', async (c) => {
           ${allAllowances.map(a => html`
             <tr>
               <td><code>${a.agentId}</code></td>
-              <td>$${a.dailyLimit.toFixed(2)}</td>
+              <td>$${(a.dailyLimit ?? 0).toFixed(2)}</td>
               <td>$${(a.spentToday || 0).toFixed(2)}</td>
               <td>$${(a.spentThisMonth || 0).toFixed(2)}</td>
               <td><span class="status-${a.status}">${a.status}</span></td>
@@ -188,6 +197,182 @@ app.get('/', async (c) => {
     </html>
   `);
 });
+
+// ===========================================
+// API Routes - GET (Query)
+// ===========================================
+
+// --- GET: Allowances ---
+app.get('/api/allowances', async (c) => {
+  const agentId = c.req.query('agentId');
+  const status = c.req.query('status');
+  const limit = parseInt(c.req.query('limit') || '50');
+  const offset = parseInt(c.req.query('offset') || '0');
+
+  let results;
+  
+  if (agentId) {
+    results = await db.select().from(allowances).where(eq(allowances.agentId, agentId)).limit(limit).offset(offset).all();
+  } else if (status) {
+    results = await db.select().from(allowances).where(eq(allowances.status, status)).limit(limit).offset(offset).all();
+  } else {
+    results = await db.select().from(allowances).limit(limit).offset(offset).all();
+  }
+
+  return c.json({ data: results, count: results.length, limit, offset });
+});
+
+app.get('/api/allowances/:id', async (c) => {
+  const id = c.req.param('id');
+  const result = await db.select().from(allowances).where(eq(allowances.id, id)).limit(1).get();
+  
+  if (!result) return c.json({ error: 'Allowance not found' }, 404);
+  return c.json(result);
+});
+
+// --- GET: Invoices ---
+app.get('/api/invoices', async (c) => {
+  const issuerId = c.req.query('issuerId');
+  const recipientId = c.req.query('recipientId');
+  const status = c.req.query('status');
+  const limit = parseInt(c.req.query('limit') || '50');
+  const offset = parseInt(c.req.query('offset') || '0');
+
+  let results;
+  
+  if (issuerId) {
+    results = await db.select().from(invoices).where(eq(invoices.issuerId, issuerId)).orderBy(desc(invoices.createdAt)).limit(limit).offset(offset).all();
+  } else if (recipientId) {
+    results = await db.select().from(invoices).where(eq(invoices.recipientId, recipientId)).orderBy(desc(invoices.createdAt)).limit(limit).offset(offset).all();
+  } else if (status) {
+    results = await db.select().from(invoices).where(eq(invoices.status, status)).orderBy(desc(invoices.createdAt)).limit(limit).offset(offset).all();
+  } else {
+    results = await db.select().from(invoices).orderBy(desc(invoices.createdAt)).limit(limit).offset(offset).all();
+  }
+
+  return c.json({ data: results, count: results.length, limit, offset });
+});
+
+app.get('/api/invoices/:id', async (c) => {
+  const id = c.req.param('id');
+  const result = await db.select().from(invoices).where(eq(invoices.id, id)).limit(1).get();
+  
+  if (!result) return c.json({ error: 'Invoice not found' }, 404);
+  return c.json(result);
+});
+
+// --- GET: Subscriptions ---
+app.get('/api/subscriptions', async (c) => {
+  const subscriberId = c.req.query('subscriberId');
+  const providerId = c.req.query('providerId');
+  const status = c.req.query('status');
+  const limit = parseInt(c.req.query('limit') || '50');
+  const offset = parseInt(c.req.query('offset') || '0');
+
+  let results;
+  
+  if (subscriberId) {
+    results = await db.select().from(subscriptions).where(eq(subscriptions.subscriberId, subscriberId)).limit(limit).offset(offset).all();
+  } else if (providerId) {
+    results = await db.select().from(subscriptions).where(eq(subscriptions.providerId, providerId)).limit(limit).offset(offset).all();
+  } else if (status) {
+    results = await db.select().from(subscriptions).where(eq(subscriptions.status, status)).limit(limit).offset(offset).all();
+  } else {
+    results = await db.select().from(subscriptions).limit(limit).offset(offset).all();
+  }
+
+  return c.json({ data: results, count: results.length, limit, offset });
+});
+
+app.get('/api/subscriptions/:id', async (c) => {
+  const id = c.req.param('id');
+  const result = await db.select().from(subscriptions).where(eq(subscriptions.id, id)).limit(1).get();
+  
+  if (!result) return c.json({ error: 'Subscription not found' }, 404);
+  return c.json(result);
+});
+
+// --- GET: Transactions ---
+app.get('/api/transactions', async (c) => {
+  const allowanceId = c.req.query('allowanceId');
+  const category = c.req.query('category');
+  const limit = parseInt(c.req.query('limit') || '50');
+  const offset = parseInt(c.req.query('offset') || '0');
+
+  let results;
+  
+  if (allowanceId) {
+    results = await db.select().from(transactions).where(eq(transactions.allowanceId, allowanceId)).orderBy(desc(transactions.timestamp)).limit(limit).offset(offset).all();
+  } else if (category) {
+    results = await db.select().from(transactions).where(eq(transactions.category, category)).orderBy(desc(transactions.timestamp)).limit(limit).offset(offset).all();
+  } else {
+    results = await db.select().from(transactions).orderBy(desc(transactions.timestamp)).limit(limit).offset(offset).all();
+  }
+
+  return c.json({ data: results, count: results.length, limit, offset });
+});
+
+// --- GET: Agent Summary (spending overview for an agent) ---
+app.get('/api/agents/:agentId/summary', async (c) => {
+  const agentId = c.req.param('agentId');
+  
+  // Get allowance
+  const allowance = await db.select().from(allowances).where(eq(allowances.agentId, agentId)).limit(1).get();
+  
+  // Get active subscriptions count
+  const activeSubs = await db.select().from(subscriptions).where(eq(subscriptions.subscriberId, agentId)).all();
+  const activeSubsCount = activeSubs.filter(s => s.status === 'active').length;
+  
+  // Get unpaid invoices
+  const unpaidInvoices = await db.select().from(invoices).where(eq(invoices.recipientId, agentId)).all();
+  const unpaidCount = unpaidInvoices.filter(i => i.status === 'sent').length;
+  const unpaidAmount = unpaidInvoices.filter(i => i.status === 'sent').reduce((sum, i) => sum + i.amount, 0);
+  
+  // Monthly recurring cost
+  const monthlyCost = activeSubs.reduce((sum, s) => {
+    if (s.status !== 'active') return sum;
+    if (s.interval === 'daily') return sum + (s.amount * 30);
+    if (s.interval === 'weekly') return sum + (s.amount * 4);
+    return sum + s.amount;
+  }, 0);
+
+  return c.json({
+    agentId,
+    allowance: allowance || null,
+    spending: {
+      today: allowance?.spentToday || 0,
+      thisWeek: allowance?.spentThisWeek || 0,
+      thisMonth: allowance?.spentThisMonth || 0,
+    },
+    limits: {
+      daily: allowance?.dailyLimit || 0,
+      weekly: allowance?.weeklyLimit || 0,
+      monthly: allowance?.monthlyLimit || 0,
+    },
+    subscriptions: {
+      active: activeSubsCount,
+      monthlyRecurring: monthlyCost,
+    },
+    invoices: {
+      unpaidCount,
+      unpaidAmount,
+    },
+  });
+});
+
+// --- Health check ---
+app.get('/api/health', (c) => {
+  return c.json({ 
+    status: 'ok', 
+    service: 'agent-financial-stack',
+    version: '1.3.0',
+    timestamp: new Date().toISOString()
+  });
+});
+
+// ===========================================
+// API Routes - POST/PATCH (Mutations)
+// ===========================================
 
 // --- API: Allowances ---
 app.post('/allowances', async (c) => {
