@@ -1,0 +1,285 @@
+import { Hono } from 'hono';
+import { serve } from '@hono/node-server';
+import { html } from 'hono/html';
+import { db } from './db';
+import { allowances, invoices, subscriptions, transactions } from './db/schema';
+import { desc, eq } from 'drizzle-orm';
+import { v4 as uuidv4 } from 'uuid';
+import { createInvoice, sendInvoice, payInvoice } from './core/ledger';
+import { createSubscription, processBilling, processDueSubscriptions } from './core/subscriptions';
+
+const app = new Hono();
+
+// --- Middleware ---
+app.use('*', async (c, next) => {
+  if (c.req.path.startsWith('/api') && ['POST', 'PUT', 'DELETE'].includes(c.req.method)) {
+    const apiKey = c.req.header('x-api-key');
+    if (apiKey !== 'clawd-money-v1') {
+      return c.json({ error: 'Unauthorized' }, 401);
+    }
+  }
+  await next();
+});
+
+// --- Dashboard ---
+app.get('/', async (c) => {
+  const allAllowances = await db.select().from(allowances).all();
+  const allInvoices = await db.select().from(invoices).orderBy(desc(invoices.createdAt)).all();
+  const allSubs = await db.select().from(subscriptions).all();
+  const allTx = await db.select().from(transactions).orderBy(desc(transactions.timestamp)).limit(20).all();
+
+  return c.html(html`
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>Agent Financial Stack</title>
+      <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+      <style>
+        body { font-family: -apple-system, system-ui, sans-serif; max-width: 1200px; margin: 0 auto; padding: 2rem; background: #f4f4f9; color: #333; }
+        h1 { color: #222; margin-bottom: 2rem; }
+        h2 { border-bottom: 2px solid #ddd; padding-bottom: 0.5rem; margin-top: 2rem; display: flex; justify-content: space-between; align-items: center; }
+        table { width: 100%; border-collapse: collapse; background: white; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 5px rgba(0,0,0,0.1); margin-bottom: 2rem; }
+        th, td { padding: 12px 16px; text-align: left; border-bottom: 1px solid #eee; }
+        th { background: #f8f9fa; font-weight: 600; color: #555; font-size: 0.9rem; text-transform: uppercase; letter-spacing: 0.5px; }
+        tr:hover { background: #f9f9f9; }
+        .status-active, .status-paid, .status-success { color: #166534; background: #dcfce7; padding: 4px 8px; border-radius: 12px; font-size: 0.85rem; font-weight: 600; display: inline-block; }
+        .status-sent { color: #854d0e; background: #fef9c3; padding: 4px 8px; border-radius: 12px; font-size: 0.85rem; font-weight: 600; display: inline-block; }
+        .status-draft { color: #4b5563; background: #f3f4f6; padding: 4px 8px; border-radius: 12px; font-size: 0.85rem; font-weight: 600; display: inline-block; }
+        .status-failed { color: #991b1b; background: #fee2e2; padding: 4px 8px; border-radius: 12px; font-size: 0.85rem; font-weight: 600; display: inline-block; }
+        button { background: #3b82f6; color: white; border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 0.9rem; transition: background 0.2s; }
+        button:hover { background: #2563eb; }
+        button:disabled { background: #cbd5e1; cursor: not-allowed; }
+        .btn-green { background: #22c55e; }
+        .btn-green:hover { background: #16a34a; }
+        .empty-state { padding: 2rem; text-align: center; color: #888; background: white; border-radius: 8px; }
+      </style>
+    </head>
+    <body>
+      <div style="display: flex; justify-content: space-between; align-items: center;">
+        <h1>💸 Agent Financial Stack</h1>
+        <div>
+          <button class="btn-green" hx-post="/billing/process" hx-swap="none" onClick="alert('Billing process triggered!')">
+             Run Billing Cycle 🔄
+          </button>
+        </div>
+      </div>
+      
+      <h2>🤖 Agent Allowances</h2>
+      ${allAllowances.length === 0 ? html`<div class="empty-state">No allowances active</div>` : html`
+      <table>
+        <thead>
+          <tr>
+            <th>Agent ID</th>
+            <th>Daily Limit</th>
+            <th>Spent (Today)</th>
+            <th>Spent (Month)</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${allAllowances.map(a => html`
+            <tr>
+              <td><code>${a.agentId}</code></td>
+              <td>$${a.dailyLimit.toFixed(2)}</td>
+              <td>$${(a.spentToday || 0).toFixed(2)}</td>
+              <td>$${(a.spentThisMonth || 0).toFixed(2)}</td>
+              <td><span class="status-${a.status}">${a.status}</span></td>
+            </tr>
+          `)}
+        </tbody>
+      </table>
+      `}
+
+      <h2>📅 Active Subscriptions</h2>
+      ${allSubs.length === 0 ? html`<div class="empty-state">No active subscriptions</div>` : html`
+      <table>
+        <thead>
+          <tr>
+            <th>Provider</th>
+            <th>Subscriber</th>
+            <th>Plan</th>
+            <th>Amount</th>
+            <th>Next Bill</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${allSubs.map(s => html`
+            <tr>
+              <td><code>${s.providerId}</code></td>
+              <td><code>${s.subscriberId}</code></td>
+              <td>${s.planId}</td>
+              <td>$${s.amount.toFixed(2)} / ${s.interval}</td>
+              <td>${new Date(s.nextBillingDate).toLocaleDateString()} ${new Date(s.nextBillingDate).toLocaleTimeString()}</td>
+              <td><span class="status-${s.status}">${s.status}</span></td>
+            </tr>
+          `)}
+        </tbody>
+      </table>
+      `}
+
+      <h2>🧾 Invoices</h2>
+      ${allInvoices.length === 0 ? html`<div class="empty-state">No invoices generated</div>` : html`
+      <table>
+        <thead>
+          <tr>
+            <th>Date</th>
+            <th>ID</th>
+            <th>Issuer</th>
+            <th>Recipient</th>
+            <th>Amount</th>
+            <th>Status</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${allInvoices.map(i => html`
+            <tr>
+              <td>${new Date(i.createdAt || 0).toLocaleDateString()}</td>
+              <td><small>${i.id.substring(0, 8)}...</small></td>
+              <td><code>${i.issuerId}</code></td>
+              <td><code>${i.recipientId}</code></td>
+              <td>$${i.amount.toFixed(2)}</td>
+              <td><span class="status-${i.status}">${i.status}</span></td>
+              <td>
+                ${i.status === 'draft' ? html`
+                  <button hx-post="/invoices/${i.id}/send" hx-swap="outerHTML">Send</button>
+                ` : ''}
+                ${i.status === 'sent' ? html`<span style="color:#888; font-size:0.8rem">Pending Payment</span>` : ''}
+              </td>
+            </tr>
+          `)}
+        </tbody>
+      </table>
+      `}
+
+      <h2>📜 Transaction History (Last 20)</h2>
+      ${allTx.length === 0 ? html`<div class="empty-state">No transactions yet</div>` : html`
+      <table>
+        <thead>
+          <tr>
+            <th>Time</th>
+            <th>Amount</th>
+            <th>Category</th>
+            <th>Recipient</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${allTx.map(t => html`
+            <tr>
+              <td>${new Date(t.timestamp || 0).toLocaleString()}</td>
+              <td>$${t.amount.toFixed(2)}</td>
+              <td>${t.category}</td>
+              <td>${t.recipient}</td>
+              <td><span class="status-${t.status}">${t.status}</span></td>
+            </tr>
+          `)}
+        </tbody>
+      </table>
+      `}
+
+      <footer style="margin-top: 3rem; color: #888; font-size: 0.9rem; text-align: center;">
+        Agent Financial Stack v1.2 • <a href="/billing/process" style="color: #666">Trigger Billing API</a>
+      </footer>
+    </body>
+    </html>
+  `);
+});
+
+// --- API: Allowances ---
+app.post('/allowances', async (c) => {
+  const body = await c.req.json();
+  const { agentId, ownerId, dailyLimit } = body;
+
+  if (!agentId || !ownerId) return c.json({ error: 'Missing fields' }, 400);
+
+  const id = uuidv4();
+  try {
+    await db.insert(allowances).values({
+      id,
+      agentId,
+      ownerId,
+      dailyLimit: dailyLimit || 0,
+      createdAt: Date.now(),
+      status: 'active'
+    }).run();
+    return c.json({ success: true, allowanceId: id });
+  } catch (e) {
+    console.error(e);
+    return c.json({ error: 'Database error' }, 500);
+  }
+});
+
+// --- API: Invoices ---
+app.post('/invoices', async (c) => {
+  const body = await c.req.json();
+  const { issuerId, recipientId, amount } = body;
+
+  if (!issuerId || !recipientId || !amount) return c.json({ error: 'Missing fields' }, 400);
+
+  const result = await createInvoice(issuerId, recipientId, amount);
+  if (result.success) return c.json(result);
+  return c.json(result, 500);
+});
+
+app.post('/invoices/:id/send', async (c) => {
+  const id = c.req.param('id');
+  const result = await sendInvoice(id);
+  
+  // If request from HTMX/Browser, redirect to home to refresh
+  if (c.req.header('hx-request')) {
+     return c.redirect('/');
+  }
+  
+  if (result.success) return c.json(result);
+  return c.json(result, 400);
+});
+
+app.post('/invoices/pay', async (c) => {
+  const body = await c.req.json();
+  const { invoiceId, agentId, allowanceId } = body; 
+
+  if (!invoiceId || !agentId) return c.json({ error: 'Missing fields' }, 400);
+
+  const result = await payInvoice(invoiceId, agentId, allowanceId);
+  if (result.success) return c.json(result);
+  return c.json(result, 400);
+});
+
+// --- API: Subscriptions ---
+app.post('/subscriptions', async (c) => {
+  const body = await c.req.json();
+  const { subscriberId, providerId, planId, amount, interval, allowanceId } = body;
+
+  if (!subscriberId || !providerId || !planId || !amount || !allowanceId) {
+    return c.json({ error: 'Missing fields' }, 400);
+  }
+
+  const result = await createSubscription(subscriberId, providerId, planId, amount, interval || 'monthly', allowanceId);
+  if (result.success) return c.json(result);
+  return c.json(result, 500);
+});
+
+// --- API: Billing ---
+app.post('/billing/process', async (c) => {
+  const result = await processDueSubscriptions();
+  
+  // If HTMX request, we can just return a success message or redirect
+  if (c.req.header('hx-request')) {
+    // Maybe trigger a reload?
+    return c.redirect('/');
+  }
+
+  return c.json(result);
+});
+
+const port = 3300;
+console.log(`Server is running on port ${port}`);
+
+serve({
+  fetch: app.fetch,
+  port
+});
