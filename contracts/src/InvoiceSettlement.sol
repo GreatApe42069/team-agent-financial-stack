@@ -15,7 +15,7 @@ import "@openzeppelin/contracts/access/Ownable.sol";
  * - Draft → Sent → Paid lifecycle
  * - Escrow-based settlement
  * - Dispute resolution
- * - Revenue sharing (95% worker, 5% validator)
+ * - Platform fee model (95% to worker, 5% to protocol)
  * - Partial payments support
  */
 contract InvoiceSettlement is Ownable, ReentrancyGuard, Pausable {
