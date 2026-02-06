@@ -423,6 +423,9 @@ contract InvoiceSettlement is Ownable, ReentrancyGuard, Pausable {
         Invoice storage invoice = invoices[invoiceId];
         uint256 escrow = escrowBalances[invoiceId];
         
+        // Ensure invoice is fully funded before final settlement
+        require(escrow >= invoice.amount, "Invoice not fully funded");
+        
         // Calculate fee (5%)
         uint256 platformFee = (escrow * PLATFORM_FEE_BPS) / BPS_DENOMINATOR;
         uint256 payoutAmount = escrow - platformFee;
