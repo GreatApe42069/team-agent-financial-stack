@@ -305,6 +305,7 @@ contract InvoiceSettlement is Ownable, ReentrancyGuard, Pausable {
         if (invoice.state != InvoiceState.ESCROWED) {
             revert InvalidState(invoice.state, InvoiceState.ESCROWED);
         }
+        require(invoice.paidAmount == invoice.amount, "Invoice not fully funded");
         require(validators.length > 0, "Need validators");
         
         invoice.state = InvoiceState.DISPUTED;
