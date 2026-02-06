@@ -227,13 +227,14 @@ forge test --match-test testAllowanceCreation -vvv
 forge coverage
 ```
 
-### Test Structure
-```
+### Test Structure (Planned)
+```text
+# Recommended Foundry test layout (may not yet be present in this repo)
 test/
 ├── AgentAllowance.t.sol      # Allowance creation, spending, rollover
 ├── InvoiceSettlement.t.sol   # Invoice lifecycle, disputes
 ├── RecurringPayments.t.sol   # Subscription billing, cancellation
-└── Integration.t.sol          # Full workflow tests
+└── Integration.t.sol         # Full workflow tests
 ```
 
 ---
