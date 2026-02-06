@@ -200,8 +200,7 @@ contract AgentAllowance is Ownable, ReentrancyGuard, Pausable {
             bytes32 txHash = keccak256(abi.encodePacked(
                 allowanceId,
                 recipient,
-                amount,
-                block.timestamp
+                amount
             ));
             
             uint256 approvals = multiSig.approvals[txHash];
