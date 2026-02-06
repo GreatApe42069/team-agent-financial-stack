@@ -364,7 +364,8 @@ contract InvoiceSettlement is Ownable, ReentrancyGuard, Pausable {
             );
             invoice.state = InvoiceState.CANCELLED;
         } else {
-            // Settle to issuer
+            // Settle to issuer; ensure invoice is fully funded
+            require(invoice.paidAmount == invoice.amount, "Invoice not fully funded");
             _settle(invoiceId);
         }
         
