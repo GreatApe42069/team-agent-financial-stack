@@ -310,7 +310,7 @@ contract RecurringPayments is Ownable, ReentrancyGuard, Pausable {
         if (sub.state != SubState.ACTIVE) {
             revert SubscriptionNotActive(subId);
         }
-        if (block.timestamp < sub.nextBilling && sub.lastBilled > 0) {
+        if (block.timestamp < sub.nextBilling) {
             return; // Not due yet
         }
         if (sub.failedBillings >= MAX_FAILED_BILLINGS) {
